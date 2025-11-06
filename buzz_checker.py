@@ -411,21 +411,89 @@ def display_results(availability, studio_numbers, time_slots):
     print("\n" + "="*60)
 
 
+def show_usage():
+    """使用方法を表示"""
+    usage_text = """
+使用方法:
+  python buzz_checker.py [日付] [スタジオ] [時間帯] [オプション]
+
+位置引数（順番指定）:
+  日付    日付指定（例: 2025-11-10, 火曜, today, tomorrow）
+          省略時は 'today' が使用されます
+  スタジオ  スタジオ指定（例: 1st, 1st,2st,3st, all, 1-5）
+          省略時は 'all' が使用されます
+  時間帯  時間帯指定（例: 10:00, 10:00-12:00, 10:00,11:00,12:00）
+          省略時は全時間帯が使用されます
+
+オプション:
+  -d, --date DATE      日付指定（位置引数でも指定可能）
+  -s, --studio STUDIO  スタジオ指定（位置引数でも指定可能）
+  -t, --time TIME      時間帯指定（位置引数でも指定可能）
+  --show-browser       ブラウザを表示する
+  -h, --help          このヘルプメッセージを表示
+
+使用例:
+  python buzz_checker.py 火曜 1st,2st 10:00-12:00
+  python buzz_checker.py today all
+  python buzz_checker.py --date 火曜 --studio 1-5 --time 14:00,15:00
+  python buzz_checker.py 2025-11-10 1st 10:00
+"""
+    print(usage_text)
+
+
 def main():
     """メイン関数"""
-    parser = argparse.ArgumentParser(description='BUZZ福岡本店 予約状況チェッカー')
-    parser.add_argument('--date', '-d', type=str, default='today',
+    parser = argparse.ArgumentParser(
+        description='BUZZ福岡本店 予約状況チェッカー',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+使用例:
+  python buzz_checker.py 火曜 1st,2st 10:00-12:00
+  python buzz_checker.py today all
+  python buzz_checker.py --date 火曜 --studio 1-5 --time 14:00,15:00
+  
+位置引数で指定する場合、順番は [日付] [スタジオ] [時間帯] です。
+オプション引数（--date, --studio, --time）でも同じように指定できます。
+        """
+    )
+    
+    # 位置引数（順番指定）
+    parser.add_argument('date_pos', nargs='?', type=str, default='today',
+                       metavar='日付',
                        help='日付指定（例: 2025-11-10, 火曜, today, tomorrow）')
-    parser.add_argument('--studio', '-s', type=str, default='all',
+    parser.add_argument('studio_pos', nargs='?', type=str, default='all',
+                       metavar='スタジオ',
                        help='スタジオ指定（例: 1st, 1st,2st,3st, all, 1-5）')
-    parser.add_argument('--time', '-t', type=str, default=None,
+    parser.add_argument('time_pos', nargs='?', type=str, default=None,
+                       metavar='時間帯',
                        help='時間帯指定（例: 10:00, 10:00-12:00, 10:00,11:00,12:00）')
+    
+    # オプション引数（--date, --studio, --time でも指定可能）
+    parser.add_argument('--date', '-d', type=str, dest='date_opt',
+                       help='日付指定（オプション形式）')
+    parser.add_argument('--studio', '-s', type=str, dest='studio_opt',
+                       help='スタジオ指定（オプション形式）')
+    parser.add_argument('--time', '-t', type=str, dest='time_opt',
+                       help='時間帯指定（オプション形式）')
+    
     parser.add_argument('--headless', action='store_true', default=True,
                        help='ヘッドレスモードで実行（デフォルト: True）')
     parser.add_argument('--show-browser', action='store_true',
                        help='ブラウザを表示する（--headlessの逆）')
     
-    args = parser.parse_args()
+    try:
+        args = parser.parse_args()
+    except SystemExit as e:
+        # argparseが自動的にヘルプを表示して終了する
+        # 追加でカスタムusageを表示
+        if e.code == 0:  # ヘルプ表示時（正常終了）
+            show_usage()
+        return
+    
+    # オプション引数が指定されている場合はそちらを優先
+    date_input = args.date_opt if args.date_opt else args.date_pos
+    studio_input = args.studio_opt if args.studio_opt else args.studio_pos
+    time_input = args.time_opt if args.time_opt else args.time_pos
     
     # ヘッドレスモードの設定
     headless = args.headless and not args.show_browser
@@ -435,20 +503,24 @@ def main():
     try:
         # 日付をパース
         try:
-            target_date = parse_date_input(args.date)
+            target_date = parse_date_input(date_input)
             weekday_names = ['月', '火', '水', '木', '金', '土', '日']
             weekday = weekday_names[target_date.weekday()]
             print(f"チェック対象日: {target_date.strftime('%Y年%m月%d日')} ({weekday}曜日)")
         except ValueError as e:
-            print(f"エラー: {e}")
+            print(f"エラー: 日付のパースに失敗しました - {e}")
+            print()
+            show_usage()
             return
         
         # スタジオをパース
         try:
-            studio_numbers = parse_studio_input(args.studio)
+            studio_numbers = parse_studio_input(studio_input)
             print(f"チェック対象スタジオ: {', '.join(studio_numbers)}")
         except ValueError as e:
-            print(f"エラー: {e}")
+            print(f"エラー: スタジオのパースに失敗しました - {e}")
+            print()
+            show_usage()
             return
         
         # 予約表を取得
@@ -460,11 +532,13 @@ def main():
         reservation_data = checker.extract_reservation_data(soup)
         
         # 時間帯の処理
-        if args.time:
+        if time_input:
             try:
-                time_slots = parse_time_input(args.time)
+                time_slots = parse_time_input(time_input)
             except ValueError as e:
-                print(f"エラー: {e}")
+                print(f"エラー: 時間帯のパースに失敗しました - {e}")
+                print()
+                show_usage()
                 return
         else:
             # 時間帯が指定されていない場合は全時間帯を使用
@@ -473,7 +547,7 @@ def main():
                 first_studio = list(reservation_data.keys())[0]
                 time_slots = sorted(reservation_data[first_studio].keys())
             else:
-                print("予約データが取得できませんでした")
+                print("エラー: 予約データが取得できませんでした")
                 return
         
         print(f"チェック対象時間帯: {len(time_slots)}時間帯")
@@ -484,6 +558,10 @@ def main():
         # 結果を表示
         display_results(availability, studio_numbers, time_slots)
         
+    except Exception as e:
+        print(f"エラーが発生しました: {e}")
+        print()
+        show_usage()
     finally:
         checker.close()
 
