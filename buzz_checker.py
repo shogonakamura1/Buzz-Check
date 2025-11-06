@@ -132,6 +132,114 @@ class BuzzChecker:
             print(f"エラーが発生しました: {str(e)}")
             raise
     
+    def extract_reservation_data(self, soup):
+        """
+        予約表から空き状況データを抽出
+        
+        Args:
+            soup (BeautifulSoup): 予約表のHTMLパース結果
+            
+        Returns:
+            dict: スタジオ番号をキー、時間帯ごとの空き状況を値とする辞書
+                 形式: {
+                     '1st': {
+                         '06:00': 'available',  # または 'reserved'
+                         '06:30': 'reserved',
+                         ...
+                     },
+                     ...
+                 }
+        """
+        reservation_data = {}
+        
+        # 予約表のテーブルを探す
+        table = soup.find('table', class_='studio_all_reserve_time_table')
+        if not table:
+            print("予約表が見つかりませんでした")
+            return reservation_data
+        
+        # ヘッダーからスタジオ番号を取得
+        headers = table.find('thead').find_all('th')
+        studio_numbers = []
+        for header in headers[1:]:  # 最初の列（時間列）を除く
+            studio_name = header.find('div', class_='studio_reserve_time_table_studio_name')
+            if studio_name:
+                studio_num = studio_name.text.strip()
+                studio_numbers.append(studio_num)
+                reservation_data[studio_num] = {}
+        
+        # 各行から時間と空き状況を抽出
+        rows = table.find('tbody').find_all('tr')
+        for row in rows:
+            cells = row.find_all('td')
+            if not cells:
+                continue
+            
+            # 時間を取得
+            time_cell = cells[0]
+            time_str = time_cell.text.strip()
+            
+            # 各スタジオの空き状況を確認
+            for i, cell in enumerate(cells[1:], 0):
+                if i >= len(studio_numbers):
+                    break
+                
+                studio_num = studio_numbers[i]
+                
+                # 予約済みかどうかを判定
+                # studio_reserve_time_table_closeクラスのボタンがある = 予約済み
+                close_button = cell.find('button', class_='studio_reserve_time_table_close')
+                if close_button:
+                    status = 'reserved'
+                else:
+                    # 予約可能なリンクがあるか、または空いている
+                    link = cell.find('a')
+                    if link:
+                        status = 'available'
+                    else:
+                        # ボタンもリンクもない場合、空いている可能性
+                        status = 'available'
+                
+                reservation_data[studio_num][time_str] = status
+        
+        return reservation_data
+    
+    def check_availability(self, reservation_data, studio_numbers, time_slots):
+        """
+        指定したスタジオと時間帯の空き状況をチェック
+        
+        Args:
+            reservation_data (dict): extract_reservation_data()で取得したデータ
+            studio_numbers (list): チェックしたいスタジオ番号のリスト（例: ['1st', '2st']）
+            time_slots (list): チェックしたい時間帯のリスト（例: ['10:00', '10:30', '11:00']）
+            
+        Returns:
+            dict: 空き状況の結果
+                 形式: {
+                     '1st': {
+                         '10:00': 'available',
+                         '10:30': 'reserved',
+                         ...
+                     },
+                     ...
+                 }
+        """
+        result = {}
+        
+        for studio_num in studio_numbers:
+            if studio_num not in reservation_data:
+                print(f"警告: スタジオ {studio_num} が見つかりません")
+                continue
+            
+            result[studio_num] = {}
+            for time_slot in time_slots:
+                if time_slot in reservation_data[studio_num]:
+                    result[studio_num][time_slot] = reservation_data[studio_num][time_slot]
+                else:
+                    result[studio_num][time_slot] = 'not_found'
+        
+        return result
+    
     def close(self):
         """ブラウザを閉じる"""
         if self.driver:
@@ -141,16 +249,41 @@ class BuzzChecker:
 
 def main():
     """メイン関数（テスト用）"""
-    checker = BuzzChecker(headless=False)  # デバッグ用にブラウザを表示
+    checker = BuzzChecker(headless=True)
     
     try:
         # 今日の日付でテスト
         today = datetime.now()
+        print(f"予約表を取得中: {today.strftime('%Y-%m-%d')}")
         soup = checker.get_reservation_table(today)
         
-        # HTMLの一部を表示（デバッグ用）
-        print("\n=== 取得したHTMLの一部 ===")
-        print(soup.prettify()[:2000])
+        # データ抽出
+        print("\n予約データを抽出中...")
+        reservation_data = checker.extract_reservation_data(soup)
+        
+        # 結果を表示
+        print(f"\n=== 抽出結果 ===")
+        print(f"スタジオ数: {len(reservation_data)}")
+        
+        # 各スタジオの空き状況をサマリー表示
+        for studio_num in sorted(reservation_data.keys()):
+            times = reservation_data[studio_num]
+            available_count = sum(1 for status in times.values() if status == 'available')
+            reserved_count = sum(1 for status in times.values() if status == 'reserved')
+            print(f"{studio_num}: 空き={available_count}件, 予約済み={reserved_count}件")
+        
+        # 特定のスタジオと時間帯をチェック（テスト）
+        print("\n=== 特定スタジオ・時間帯のチェック ===")
+        test_studios = ['1st', '2st']
+        test_times = ['10:00', '10:30', '11:00', '11:30']
+        availability = checker.check_availability(reservation_data, test_studios, test_times)
+        
+        for studio_num in test_studios:
+            print(f"\n{studio_num}:")
+            for time_slot in test_times:
+                status = availability[studio_num].get(time_slot, 'not_found')
+                status_jp = '空き' if status == 'available' else '予約済み' if status == 'reserved' else '不明'
+                print(f"  {time_slot}: {status_jp}")
         
     finally:
         checker.close()
